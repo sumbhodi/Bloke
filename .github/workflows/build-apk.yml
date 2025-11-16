@@ -1,0 +1,83 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Download llama.cpp libraries
+      run: |
+        mkdir -p libs
+        # Replace with your actual release URL
+        wget -q -P libs https://github.com/YOUR_USERNAME/bloke/releases/download/llama-libs-v1.0/libllama.so
+        wget -q -P libs https://github.com/YOUR_USERNAME/bloke/releases/download/llama-libs-v1.0/libggml.so
+        wget -q -P libs https://github.com/YOUR_USERNAME/bloke/releases/download/llama-libs-v1.0/libggml-base.so
+        wget -q -P libs https://github.com/YOUR_USERNAME/bloke/releases/download/llama-libs-v1.0/libggml-cpu.so
+        wget -q -P libs https://github.com/YOUR_USERNAME/bloke/releases/download/llama-libs-v1.0/libmtmd.so
+        ls -lh libs/
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y openjdk-17-jdk
+        pip install buildozer cython==0.29.33 Pillow
+
+    - name: Build APK
+      run: |
+        export JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64
+        export PATH=$JAVA_HOME/bin:$PATH
+        buildozer android debug
+
+    - name: Manual injection (90s style)
+      run: |
+        APK_FILE=$(find bin -name "*.apk" | head -1)
+        mkdir -p temp_inject/lib/arm64-v8a
+        mkdir -p temp_inject/assets/private
+        
+        cp libs/*.so temp_inject/lib/arm64-v8a/
+        cp llama_wrapper.py temp_inject/assets/private/
+        
+        cd temp_inject
+        zip -r "../$APK_FILE" lib/ assets/
+        cd ..
+
+    - name: Verify injection
+      run: |
+        APK_FILE=$(find bin -name "*.apk" | head -1)
+        echo "=== .so files ==="
+        unzip -l "$APK_FILE" | grep -E "(libllama|libggml)"
+        echo "=== Python wrapper ==="
+        unzip -l "$APK_FILE" | grep "llama_wrapper"
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: bloke-apk
+        path: bin/*.apk
+5. Simple .gitignore additions
+Add to the Python template:
+
+# Buildozer
+.buildozer/
+bin/
+*.apk
+
+# Downloaded libs
+libs/
+
+# Models
+*.gguf
+models/
