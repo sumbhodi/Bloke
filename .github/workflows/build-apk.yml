@@ -13,15 +13,30 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v3
 
+    - name: Verify source code
+      run: |
+        echo "=== Verifying Python files exist ==="
+        ls -lh Main.py llama_wrapper.py buildozer.spec
+        echo "=== Main.py first 5 lines ==="
+        head -5 Main.py
+        echo "=== llama_wrapper.py first 5 lines ==="
+        head -5 llama_wrapper.py
+
     - name: Download llama.cpp libraries
       run: |
         mkdir -p libs
+        # Download pre-built .so files from GitHub release
         # Replace with your actual release URL
-        wget -q -P libs https://github.com/YOUR_USERNAME/bloke/releases/download/llama-libs-v1.0/libllama.so
-        wget -q -P libs https://github.com/YOUR_USERNAME/bloke/releases/download/llama-libs-v1.0/libggml.so
-        wget -q -P libs https://github.com/YOUR_USERNAME/bloke/releases/download/llama-libs-v1.0/libggml-base.so
-        wget -q -P libs https://github.com/YOUR_USERNAME/bloke/releases/download/llama-libs-v1.0/libggml-cpu.so
-        wget -q -P libs https://github.com/YOUR_USERNAME/bloke/releases/download/llama-libs-v1.0/libmtmd.so
+        RELEASE_URL="https://github.com/sumbhodi/Bloke/releases/download/llama-libs-v1.0"
+
+        echo "Downloading .so files from $RELEASE_URL"
+        wget -q -P libs "$RELEASE_URL/libllama.so" || echo "Warning: libllama.so not found"
+        wget -q -P libs "$RELEASE_URL/libggml.so" || echo "Warning: libggml.so not found"
+        wget -q -P libs "$RELEASE_URL/libggml-base.so" || echo "Warning: libggml-base.so not found"
+        wget -q -P libs "$RELEASE_URL/libggml-cpu.so" || echo "Warning: libggml-cpu.so not found"
+        wget -q -P libs "$RELEASE_URL/libmtmd.so" || echo "Warning: libmtmd.so not found"
+
+        echo "Downloaded files:"
         ls -lh libs/
 
     - name: Setup Python
@@ -29,55 +44,83 @@ jobs:
       with:
         python-version: '3.10'
 
-    - name: Install dependencies
+    - name: Setup Java
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Install buildozer dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y openjdk-17-jdk
+        sudo apt-get install -y zip unzip
         pip install buildozer cython==0.29.33 Pillow
 
-    - name: Build APK
+    - name: Build APK with buildozer
       run: |
-        export JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64
-        export PATH=$JAVA_HOME/bin:$PATH
         buildozer android debug
 
-    - name: Manual injection (90s style)
+        # Find the generated APK
+        APK_FILE=$(find bin -name "*.apk" | head -1)
+        echo "Built APK: $APK_FILE"
+        ls -lh "$APK_FILE"
+
+    - name: Manual .so injection (90s style!)
       run: |
         APK_FILE=$(find bin -name "*.apk" | head -1)
+
+        echo "=== Original APK size ==="
+        ls -lh "$APK_FILE"
+
+        # Prepare injection directories
         mkdir -p temp_inject/lib/arm64-v8a
-        mkdir -p temp_inject/assets/private
-        
-        cp libs/*.so temp_inject/lib/arm64-v8a/
-        cp llama_wrapper.py temp_inject/assets/private/
-        
+
+        # Copy .so files to injection directory
+        if [ -d "libs" ] && [ "$(ls -A libs/*.so 2>/dev/null)" ]; then
+          cp libs/*.so temp_inject/lib/arm64-v8a/
+          echo "Copied .so files:"
+          ls -lh temp_inject/lib/arm64-v8a/
+        else
+          echo "Warning: No .so files found in libs/"
+        fi
+
+        # Inject into APK using zip
         cd temp_inject
-        zip -r "../$APK_FILE" lib/ assets/
+        if [ -d "lib/arm64-v8a" ] && [ "$(ls -A lib/arm64-v8a)" ]; then
+          zip -r "../$APK_FILE" lib/
+          echo "Injected .so files into APK"
+        fi
         cd ..
 
-    - name: Verify injection
+        echo "=== Modified APK size ==="
+        ls -lh "$APK_FILE"
+
+    - name: Verify APK contents
       run: |
         APK_FILE=$(find bin -name "*.apk" | head -1)
-        echo "=== .so files ==="
-        unzip -l "$APK_FILE" | grep -E "(libllama|libggml)"
-        echo "=== Python wrapper ==="
-        unzip -l "$APK_FILE" | grep "llama_wrapper"
+        echo "=== Checking .so files in APK ==="
+        unzip -l "$APK_FILE" | grep -E "\.so$" || echo "No .so files found in APK"
+        echo ""
+        echo "=== Full APK contents ==="
+        unzip -l "$APK_FILE"
+
+    - name: Create timestamped APK name
+      id: rename
+      run: |
+        APK_FILE=$(find bin -name "*.apk" | head -1)
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+        NEW_NAME="bloke-${TIMESTAMP}.apk"
+
+        cp "$APK_FILE" "$NEW_NAME"
+        echo "artifact_name=bloke-apk-${TIMESTAMP}" >> $GITHUB_OUTPUT
+        echo "apk_filename=${NEW_NAME}" >> $GITHUB_OUTPUT
+
+        echo "Created timestamped APK: $NEW_NAME"
+        ls -lh "$NEW_NAME"
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: bloke-apk
-        path: bin/*.apk
-5. Simple .gitignore additions
-Add to the Python template:
-
-# Buildozer
-.buildozer/
-bin/
-*.apk
-
-# Downloaded libs
-libs/
-
-# Models
-*.gguf
-models/
+        name: ${{ steps.rename.outputs.artifact_name }}
+        path: ${{ steps.rename.outputs.apk_filename }}
+        retention-days: 30

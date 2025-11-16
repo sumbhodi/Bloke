@@ -218,14 +218,3 @@ libs/
 *.gguf
 *.bin
 models/
-# Buildozer
-.buildozer/
-bin/
-*.apk
-
-# Downloaded libs
-libs/
-
-# Models
-*.gguf
-models/
